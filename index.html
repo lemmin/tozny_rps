@@ -1,0 +1,156 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+	<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+	<meta content="utf-8" http-equiv="encoding">
+	<title>Rock Paper Scissors - Tozny Example</title>
+	<meta name="viewport" content="initial-scale=1.0, width=device-width" />
+	<link href='https://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' type='text/css'>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/2.6.11/vue.min.js"></script>
+	<script src="tozny-sodium.min.js"></script>
+	<script type="module">
+		import CLIENT_CONFIGS from './client_configs.js';
+		async function getToznyClient (clientConfig) {
+			return new Promise (async (resolve, reject) => {
+				try {
+					const config = Tozny.storage.Config.fromObject(clientConfig);
+					const client = new Tozny.storage.Client(config);
+
+					resolve(client);
+				} catch(e) {
+					reject(e);
+				}
+			});
+		}
+
+		// Vue component.
+		window.addEventListener('load', function () {
+			let rockPaperScissors = new Vue({
+				el: "#rockPaperScissors",
+				data: () => {
+					return {
+						player: null,
+						round: null,
+						move: 'rock',
+						winners: {
+							rock: 'paper',
+							paper: 'scissors',
+							scissors: 'rock'
+						},
+						message: null
+					};
+				},
+				computed: {
+					users () {
+						return Object.keys(CLIENT_CONFIGS);
+					}
+				},
+				methods: {
+					makeMove () {
+						getToznyClient(CLIENT_CONFIGS[this.player]).then(async client => {
+							const written = await client.writeRecord(
+								'rps_move',
+								{
+									round: this.round,
+									player: this.player,
+									move: this.move
+								}
+							);
+
+							this.message = `Player ${this.player} uses ${this.move}`;
+						});
+					},
+					judge () {
+						getToznyClient(CLIENT_CONFIGS[this.player]).then(async client => {
+							const results = await client.query(true, 'all', null, 'rps_move');
+
+							let found = await results.next();
+
+							// Filter out data that is not the current round (seems like there's a way to do this with the metadata, but I can't find the documentation).
+							found = found.filter(record => {
+								return parseInt(record.data.round) == this.round;
+							});
+
+							let winner = null;
+							// Compare every two moves against each other.
+							for (let i=0; i<found.length; i+=2) {
+								// Round is incomplete.
+								if (!found[i+1] || found[i].data.move == found[i+1].data.move) {
+									continue;
+								}
+
+								if (this.winners[found[i].data.move] == found[i+1].data.move) {
+									winner = found[i+1].data.player;
+									break;
+								}
+
+								if (this.winners[found[i+1].data.move] == found[i].data.move) {
+									winner = found[i].data.player;
+									break;
+								}
+							}
+
+							if (winner) {
+								const written = await client.writeRecord(
+									'rps_judgement',
+									{
+										round: this.round,
+										winner: winner
+									}
+								);
+							} else {
+								winner = 'no one yet!';
+							}
+
+							this.message = `Winner of round ${this.round} is ${winner}`;
+						});
+					},
+					getResult () {
+						getToznyClient(CLIENT_CONFIGS[this.player]).then(async client => {
+							const results = await client.query(true, 'all', null, 'rps_judgement');
+
+							let found = await results.next();
+
+							// Filter out data that is not the current round (seems like there's a way to do this with the metadata, but I can't find the documentation).
+							found = found.filter(record => {
+								return parseInt(record.data.round) == this.round;
+							});
+
+							if (found[0]) {
+								this.message = `Winner of round ${this.round} is ${found[0].data.winner}`;
+							} else {
+								this.message = `No winner of round ${this.round} yet.`;
+							}
+						});
+					}
+				}
+			});
+		});
+	</script>
+</head>
+<body>
+	<div id="rockPaperScissors">
+		<select v-model="player">
+			<option value="null">Select a user</option>
+			<option v-for="user in users" :value="user">{{ user }}</option>
+		</select>
+		<label>
+			Round: <input type="number" v-model="round"/>
+		</label>
+		<template v-if="player == 'Clarence'">
+			<button @click="judge">Judge</button>
+		</template>
+		<template v-else>
+			<select v-model="move">
+				<option value="rock">Rock</option>
+				<option value="paper">Paper</option>
+				<option value="scissors">Scissors</option>
+			</select>
+			<button @click="makeMove">Move</button>
+			<button @click="getResult">Get result</button>
+		</template>
+		<div>{{ message }}</div>
+	</div>
+</body>
+</html>
+
